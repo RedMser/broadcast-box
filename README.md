@@ -33,6 +33,24 @@ You could also use P2P to pull other broadcasters into your stream. No special c
 or servers required anymore to get sub-second costreams.
 
 # Using
+
+## Custom instructions
+These instructions made it work for me.
+
+- On your build device (e.g. your PC), run `git clone https://github.com/RedMser/broadcast-box.git`
+- Apply `.env.production` changes
+  - HTTP_ADDRESS is the TCP port to host website (this is done automatically by the go server, so no need to host it yourself)
+  - Add UDP_MUX_PORT - it is the UDP port to handle WebRTC stuff properly (not sure if it can be the same as HTTP_ADDRESS)
+  - Add INCLUDE_PUBLIC_IP_IN_NAT_1_TO_1_IP=yes
+  - Should likely set up SSL as well, since `/publish` won't work without it
+- Run `cd web; npm i; npm run build`
+- Copy the cloned folder onto target device (e.g. raspberry pi)
+- On the target device, run `APP_ENV=production go run .` (this needs go set up, I had `go version go1.20.2 windows/amd64`) - this also builds the application if needed
+- Via OBS: Stream onto `http(s)://<your ip><value of HTTP_ADDRESS>/api/whip`
+- Via browser: Open `http(s)://<your ip><value of HTTP_ADDRESS>/publish<stream key>`
+- Watch a stream in browser via `http(s)://<your ip><value of HTTP_ADDRESS>/<stream key>`
+
+## General instructions
 To use Broadcast Box you don't even have to run it locally! A instance of Broadcast Box
 is hosted at [b.siobud.com](https://b.siobud.com). If you wish to run it locally skip to
 [Running](#running)
