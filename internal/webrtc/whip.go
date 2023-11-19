@@ -92,7 +92,40 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 }
 
 func WHIP(offer, streamKey string) (string, error) {
-	peerConnection, err := apiWhip.NewPeerConnection(webrtc.Configuration{})
+	peerConnection, err := apiWhip.NewPeerConnection(webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			/*
+			{
+				URLs: []string{
+					"turn:freeturn.net:3478",
+				},
+				Username: "free",
+				Credential: "free",
+				CredentialType: webrtc.ICECredentialTypePassword,
+			},
+			*/
+			{
+				URLs: []string{
+					"stun:stun1.l.google.com:19302",
+				},
+			},
+			{
+				URLs: []string{
+					"stun:stun2.l.google.com:19302",
+				},
+			},
+			{
+				URLs: []string{
+					"stun:stun3.l.google.com:19302",
+				},
+			},
+			{
+				URLs: []string{
+					"stun:stun4.l.google.com:19302",
+				},
+			},
+		},
+	})
 	if err != nil {
 		return "", err
 	}
