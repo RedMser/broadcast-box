@@ -38,6 +38,7 @@ function Player({ cinemaMode }) {
   const [videoLayers, setVideoLayers] = React.useState([]);
   const [mediaSrcObject, setMediaSrcObject] = React.useState(null);
   const [layerEndpoint, setLayerEndpoint] = React.useState('');
+  const [configLocalStorage, setConfigLocalStorage] = React.useState({});
 
   const onLayerChange = event => {
     fetch(layerEndpoint, {
@@ -48,6 +49,13 @@ function Player({ cinemaMode }) {
       }
     })
   }
+
+  React.useEffect(() => {
+    const config = localStorage.getItem('broadcast-box-config');
+    if (config !== null) {
+      setConfigLocalStorage(JSON.parse(config));
+    }
+  }, []);
 
   React.useEffect(() => {
     if (videoRef.current) {
@@ -107,7 +115,7 @@ function Player({ cinemaMode }) {
       <video
         ref={videoRef}
         autoPlay
-        muted
+        muted={configLocalStorage?.muted ?? false}
         controls
         playsInline
         className={`bg-black w-full ${cinemaMode && "min-h-screen"}`}
