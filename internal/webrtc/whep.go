@@ -198,7 +198,7 @@ func (w *whepSession) sendVideoPacket(rtpPkt *rtp.Packet, layer string, timeDiff
 	w.sequenceNumber += 1
 	w.timestamp += timeDiff
 
-	rtpPkt.SequenceNumber = w.sequenceNumber
+	// rtpPkt.SequenceNumber = w.sequenceNumber
 	rtpPkt.Timestamp = w.timestamp
 
 	if err := w.videoTrack.WriteRTP(rtpPkt, isAV1); err != nil && !errors.Is(err, io.ErrClosedPipe) {
