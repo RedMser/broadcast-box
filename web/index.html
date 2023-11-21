@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Broadcast Box</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" media="screen" href="/main.css">
+    <script defer type="module" src="/main.js"></script>
+</head>
+<!-- Fork Source: https://github.com/redmser/broadcast-box -->
+<body>
+    <video
+        autoplay
+        controls
+        playsinline
+    ></video>
+    <dialog class="publish">
+        <form>
+            <p>Select streaming device:</p>
+            <button formmethod="dialog" value="screenshare" autofocus>Screen Share</button>
+            <button formmethod="dialog" value="webcam">Webcam</button>
+        </form>
+    </dialog>
+</body>
+</html>

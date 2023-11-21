@@ -101,32 +101,24 @@ the latency of 120 milleconds observed.
 
 # Running
 Broadcast Box is made up of two parts. The server is written in Go and is in charge
-of ingesting and broadcasting WebRTC. The frontend is in react and connects to the Go
+of ingesting and broadcasting WebRTC. The frontend is plain HTML/JS and connects to the Go
 backend.
 
-While developing `webpack-dev-server` is used for the frontend. In production the Go server
-can be used to serve the HTML/CSS/JS directly. These are the instructions on how to run all
-these parts.
+In production the Go server can be used to serve the HTML/CSS/JS directly.
+These are the instructions on how to run all these parts.
 
 ### Installing Dependencies
 Go dependencies are automatically installed.
 
-react dependencies are installed by running `npm install` in the `web` directory.
-
 ### Configuring
-Both projects use `.env` files for configuration. For development `.env.development` is used
+Go uses `.env` files for configuration. For development `.env.development` is used
 and in production `.env.production` is used.
 
-For Go setting `APP_ENV` will cause `.env.production` to be loaded.
+Setting `APP_ENV` will cause `.env.production` to be loaded.
 Otherwise `.env.development` is used.
 
-For react App the dev server uses `.env.development` and `npm run build`
-uses `.env.production`
-
 ### Local Development
-For local development you will run the Go server and webpack directly.
-
-To run the Go server run `go run .` in the root of this project. You will see the logs
+To run the Go server with frontend, run `go run .` in the root of this project. You will see the logs
 like the following.
 
 ```
@@ -134,28 +126,11 @@ like the following.
 2022/12/11 15:22:47 Running HTTP Server at `:8080`
 ```
 
-To run the web front open the `web` folder and execute `npm start` if that runs successfully you will
-be greeted with.
-
-```
-Compiled successfully!
-
-You can now view broadcast-box in the browser.
-
-  Local:            http://localhost:3000
-  On Your Network:  http://192.168.1.57:3000
-
-Note that the development build is not optimized.
-To create a production build, use npm run build.
-
-webpack compiled successfully
-```
-
-To use Broadcast Box you will open `http://localhost:3000` in your browser. In your broadcast tool of choice
+To use Broadcast Box you will open `http://localhost:8080` in your browser. In your broadcast tool of choice
 you will broadcast to `http://localhost:8080/api/whip`.
 
 ### Production
-For production usage Go will server the frontend and backend.
+For production usage Go will serve the frontend and backend.
 
 To run the Go server run `APP_ENV=production go run .` in the root of this project. You will see the logs
 like the following.
@@ -167,25 +142,10 @@ like the following.
 
 If `APP_ENV` was set properly `.env.production` will be loaded.
 
-To build the frontend execute `npm run build` in the `web` directory. You will get the following output.
-
-```
-> broadcast-box@0.1.0 build
-> dotenv -e ../.env.production react-scripts build
-
-Creating an optimized production build...
-Compiled successfully.
-
-File sizes after gzip:
-
-  53.51 kB  build/static/js/main.12067218.js
-  2.27 kB   build/static/css/main.8738ee38.css
-```
-
 To use Broadcast Box you will open `http://localhost:8080` in your browser. In your broadcast tool of choice
 you will broadcast to `http://localhost:8080/api/whip`.
 
-### Docker
+### Docker (Outdated)
 A Docker image is also provided to make it easier to run locally and in production. The arguments you run the Dockerfile with depending on
 if you are using it locally or a server.
 
