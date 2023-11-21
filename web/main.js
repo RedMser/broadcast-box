@@ -42,7 +42,7 @@ async function fetchStatus() {
     const currentKey = `Bearer ${currentStream}`;
     const response = await fetch(apiUrl('status'));
     const json = await response.json();
-    if (!json.some(stream => stream.streamKey === currentKey)) {
+    if (currentKey && !json.some(stream => stream.streamKey === currentKey)) {
         json.push({ streamKey: currentKey });
     }
     const body = [];
