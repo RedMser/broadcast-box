@@ -1,6 +1,95 @@
 // import { parseLinkHeader } from './parse-link-header.js';
 
 const video = document.querySelector('video');
+const nav = document.querySelector('nav');
+const navUl = nav.querySelector('ul');
+const navProgress = nav.querySelector('progress');
+
+let statusTimer;
+
+function apiUrl(url) {
+    // TODO: should instead use "REACT_APP_API_PATH"
+    return `/api/${url}`;
+}
+
+nav.addEventListener('click', () => {
+    statusRefresh();
+});
+
+function setNav(visible) {
+    setStatusTimer(visible);
+    if (visible) {
+        nav.classList.remove('hide');
+    } else {
+        nav.classList.add('hide');
+    }
+}
+setNav(true);
+
+function autoHideNav() {
+    setNav(false);
+    video.addEventListener('mousemove', event => {
+        setNav(event.clientX <= 120 && event.clientY <= 120);
+    });
+    document.documentElement.addEventListener('mouseleave', event => {
+        setNav(false);
+    });
+}
+
+async function fetchStatus() {
+    let currentStream = location.pathname.split(/\//g);
+    currentStream = currentStream[currentStream.length - 1];
+    const currentKey = `Bearer ${currentStream}`;
+    const response = await fetch(apiUrl('status'));
+    const json = await response.json();
+    if (!json.some(stream => stream.streamKey === currentKey)) {
+        json.push({ streamKey: currentKey });
+    }
+    const body = [];
+    for (const stream of json.sort((a, b) => a.streamKey.localeCompare(b.streamKey))) {
+        const streamName = stream.streamKey.substring("Bearer ".length);
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.innerText = streamName;
+        if (streamName === currentStream) {
+            a.innerText = `→ ${a.innerText} ←`;
+        }
+        a.href = `/${encodeURIComponent(streamName)}`;
+        li.appendChild(a);
+        body.push(li);
+    }
+    navUl.replaceChildren(...body);
+}
+
+function setStatusTimer(running) {
+    running = running ?? !nav.classList.contains('hide');
+    if (running) {
+        clearInterval(statusTimer);
+        statusTimer = setInterval(() => {
+            tickStatusTimer();
+        }, 75);
+    } else {
+        clearInterval(statusTimer);
+        statusTimer = undefined;
+    }
+}
+
+async function tickStatusTimer() {
+    navProgress.value += 1;
+    if (navProgress.value >= navProgress.max) {
+        await statusRefresh();
+    }
+}
+
+async function statusRefresh() {
+    if (statusTimer === undefined) {
+        return;
+    }
+    navProgress.value = 0;
+    setStatusTimer(false);
+    await fetchStatus();
+    setStatusTimer();
+}
 
 /** @param {string} message */
 function pageError(message) {
@@ -9,6 +98,7 @@ function pageError(message) {
 
 /** @param {string} key */
 async function pagePublish(key) {
+    autoHideNav();
     if (!key) {
         pageError("No stream key specified in URL.");
         return;
@@ -71,8 +161,7 @@ async function pagePublish(key) {
     const offer = await peerConnection.createOffer();
     peerConnection.setLocalDescription(offer);
 
-    // TODO: should instead use "REACT_APP_API_PATH"
-    const response = await fetch(`/api/whip`, {
+    const response = await fetch(apiUrl(`whip`), {
         method: 'POST',
         body: offer.sdp,
         headers: {
@@ -95,6 +184,7 @@ async function pageStream(key) {
         return;
     }
 
+    autoHideNav();
     const peerConnection = new RTCPeerConnection();
 
     peerConnection.addEventListener('track', event => {
@@ -107,8 +197,7 @@ async function pageStream(key) {
     const offer = await peerConnection.createOffer();
     peerConnection.setLocalDescription(offer);
 
-    // TODO: should instead use "REACT_APP_API_PATH"
-    const response = await fetch(`/api/whep`, {
+    const response = await fetch(apiUrl(`whep`), {
         method: 'POST',
         body: offer.sdp,
         headers: {

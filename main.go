@@ -124,10 +124,22 @@ type StreamStatus struct {
 	StreamKey string `json:"streamKey"`
 }
 
+func containsNumber(s string) bool {
+	for _, r := range s {
+		if '0' <= r && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
 func statusHandler(res http.ResponseWriter, req *http.Request) {
 	statuses := []StreamStatus{}
 	for _, s := range webrtc.GetAllStreams() {
-		statuses = append(statuses, StreamStatus{StreamKey: s})
+		// Use some condition to allow filtering out your streams from public viewing.
+		if !containsNumber(s) {
+			statuses = append(statuses, StreamStatus{StreamKey: s})
+		}
 	}
 
 	if err := json.NewEncoder(res).Encode(statuses); err != nil {
