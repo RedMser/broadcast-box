@@ -1,5 +1,3 @@
-// import { parseLinkHeader } from './parse-link-header.js';
-
 const video = document.querySelector('video');
 const nav = document.querySelector('nav');
 const navUl = nav.querySelector('ul');
@@ -205,21 +203,6 @@ async function pageStream(key) {
             'Content-Type': 'application/sdp'
         }
     });
-
-    /*
-    TODO: for selecting from multiple video layers:
-
-    const parsedLinkHeader = parseLinkHeader(r.headers.get('Link'));
-    setLayerEndpoint(`${window.location.protocol}//${parsedLinkHeader['urn:ietf:params:whep:ext:core:layer'].url}`);
-
-    const evtSource = new EventSource(`${window.location.protocol}//${parsedLinkHeader['urn:ietf:params:whep:ext:core:server-sent-events'].url}`);
-    evtSource.onerror = err => evtSource.close();
-
-    evtSource.addEventListener("layers", event => {
-        const parsed = JSON.parse(event.data)
-        setVideoLayers(parsed['1']['layers'].map(l => l.encodingId))
-    });
-    */
 
     const answer = await response.text();
     peerConnection.setRemoteDescription({
