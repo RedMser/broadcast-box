@@ -177,7 +177,7 @@ func populateMediaEngine(m *webrtc.MediaEngine) error {
 	for _, codec := range []webrtc.RTPCodecParameters{
 		{
 			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeOpus, 48000, 2, "minptime=10;useinbandfec=1", nil},
+			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeOpus, 48000, 2, "minptime=10;useinbandfec=1;stereo=1", nil},
 			PayloadType:        111,
 		},
 	} {

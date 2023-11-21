@@ -163,7 +163,7 @@ async function pagePublish(key) {
 
     const response = await fetch(apiUrl(`whip`), {
         method: 'POST',
-        body: offer.sdp,
+        body: offer.sdp.replace("useinbandfec=1", "useinbandfec=1;stereo=1"),
         headers: {
             Authorization: `Bearer ${key}`,
             'Content-Type': 'application/sdp'
