@@ -237,3 +237,4 @@ function handleRoute() {
     }
 }
 handleRoute();
+fetchStatus();
