@@ -120,10 +120,6 @@ func whepLayerHandler(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-type StreamStatus struct {
-	StreamKey string `json:"streamKey"`
-}
-
 func containsNumber(s string) bool {
 	for _, r := range s {
 		if '0' <= r && r <= '9' {
@@ -134,11 +130,11 @@ func containsNumber(s string) bool {
 }
 
 func statusHandler(res http.ResponseWriter, req *http.Request) {
-	statuses := []StreamStatus{}
-	for _, s := range webrtc.GetAllStreams() {
+	statuses := []webrtc.StreamStatus{}
+	for _, s := range webrtc.GetAllStreamsStatus() {
 		// Use some condition to allow filtering out your streams from public viewing.
-		if !containsNumber(s) {
-			statuses = append(statuses, StreamStatus{StreamKey: s})
+		if !containsNumber(s.StreamKey) {
+			statuses = append(statuses, s)
 		}
 	}
 

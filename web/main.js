@@ -39,12 +39,18 @@ async function fetchStatus() {
     currentStream = currentStream[currentStream.length - 1];
     const currentKey = `Bearer ${currentStream}`;
     const response = await fetch(apiUrl('status'));
-    const json = await response.json();
+    let json = await response.json();
     if (currentStream && !json.some(stream => stream.streamKey === currentKey)) {
-        json.push({ streamKey: currentKey });
+        json.push({
+            streamKey: currentKey,
+            isStreaming: false,
+        });
     }
+    json = json
+        .filter(s => s.isStreaming)
+        .sort((a, b) => a.streamKey.localeCompare(b.streamKey));
     const body = [];
-    for (const stream of json.sort((a, b) => a.streamKey.localeCompare(b.streamKey))) {
+    for (const stream of json) {
         const streamName = stream.streamKey.substring("Bearer ".length);
         const li = document.createElement('li');
         const a = document.createElement('a');

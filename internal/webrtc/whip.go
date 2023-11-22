@@ -175,12 +175,17 @@ func WHIP(offer, streamKey string) (string, error) {
 	return peerConnection.LocalDescription().SDP, nil
 }
 
-func GetAllStreams() (out []string) {
+func GetAllStreamsStatus() (out []StreamStatus) {
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
 
-	for s := range streamMap {
-		out = append(out, s)
+	for key := range streamMap {
+		stream := streamMap[key]
+		out = append(out, StreamStatus{
+			StreamKey: key,
+			// HACK: better than nothing, but there's likely better ways...
+			IsStreaming: len(stream.videoTrackLabels) > 0,
+		})
 	}
 
 	return
