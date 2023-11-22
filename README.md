@@ -19,8 +19,8 @@ broadcast multiple camera angles, or share interactive video experiences in real
 ### Broadcasters provide transcodes
 Transcodes are necessary if you want to provide a good experience to all your users.
 Generating them is prohibitively though. WebRTC provides a solution. With WebRTC
-users can upolad the same video at different quality levels. This
-keeps things cheap for the server operator and you still can provide the same
+users can upload the same video at different quality levels. This
+keeps things cheap for the server operator, and you still can provide the same
 experience.
 
 ### Peer-to-Peer (if you need it)
@@ -32,72 +32,28 @@ and playback video without paying for dedicated servers.
 You could also use P2P to pull other broadcasters into your stream. No special configuration
 or servers required anymore to get sub-second costreams.
 
-# Using
-
-## Custom instructions
+# Setup
 These instructions made it work for me.
 
-- On your build device (e.g. your PC), run `git clone https://github.com/RedMser/broadcast-box.git`
+- Run `git clone https://github.com/RedMser/broadcast-box.git`
 - Apply `.env.production` changes
   - HTTP_ADDRESS is the TCP port to host website (this is done automatically by the go server, so no need to host it yourself)
   - Add UDP_MUX_PORT - it is the UDP port to handle WebRTC stuff properly (not sure if it can be the same as HTTP_ADDRESS)
   - Add INCLUDE_PUBLIC_IP_IN_NAT_1_TO_1_IP=yes
   - Should likely set up SSL as well, since `/publish` won't work without it
-- Run `cd web; npm i; npm run build`
-- Copy the cloned folder onto target device (e.g. raspberry pi)
-- On the target device, run `APP_ENV=production go run .` (this needs go set up, I had `go version go1.20.2 windows/amd64`) - this also builds the application if needed
+- Run `APP_ENV=production go run .` (this needs go set up, I had `go version go1.20.2 windows/amd64`) - this also builds the application if needed
+
+# Usage
+
 - Via OBS: Stream onto `http(s)://<your ip><value of HTTP_ADDRESS>/api/whip`
 - Via browser: Open `http(s)://<your ip><value of HTTP_ADDRESS>/publish<stream key>`
 - Watch a stream in browser via `http(s)://<your ip><value of HTTP_ADDRESS>/<stream key>`
+- Leave out stream key to get an overview page instead
 
-## General instructions
-To use Broadcast Box you don't even have to run it locally! A instance of Broadcast Box
-is hosted at [b.siobud.com](https://b.siobud.com). If you wish to run it locally skip to
-[Running](#running)
+## Neat Features
 
-### Broadcasting
-To use Broadcast Box with OBS you must set your output to WebRTC and set a proper URL + Stream Key.
-You may use any Stream Key you like. The same stream key is used for broadcasting and playback.
-
-Go to `Settings -> Stream` and set the following values.
-
-* Service: WebRTC
-* Server: https://b.siobud.com/api/whip
-* StreamKey: (Any Stream Key you like)
-
-Your settings page should look like this.
-
-<img src="./.github/streamSettings.png">
-
-OBS by default will have ~2 seconds of latency. If you want subsecond latency you can configure
-this in `Settings -> Output`. Set your encoder to `x264` and set tune to `zerolatency`. Your Output
-page will look like this.
-
-<img src="./.github/outputPage.png">
-
-When you are ready to broadcast press `Stream Streaming` and now time to watch!
-
-### Broadcasting (Gstreamer, CLI)
-
-See the example script(s):
-  * `examples/gstreamer-broadcast.nu`
-    * can broadcast gstreamer's test sources, or pulsesrc+v4l2src
-    * expects `gstreamer-1.0`, with `good,bad,ugly` plugins and `gst-plugins-rs`
-    * ```shell
-      # testsrcs
-      ./examples/gstreamer-broadcast.nu http://localhost:8080/api/whip testStream1
-      # v4l2src
-      ./examples/gstreamer-broadcast.nu http://localhost:8080/api/whip testStream1 v4l2
-      ```
-
-### Playback
-
-If you are broadcasting to the Stream Key `StreamTest` your video will be available at https://b.siobud.com/StreamTest.
-
-You can also go to the home page and enter `StreamTest`. The following is a screenshot of OBS broadcasting and
-the latency of 120 milleconds observed.
-
-<img src="./.github/broadcastView.png">
+- When watching a stream, move your mouse to the top left corner to select from other streams
+- Stream keys with numbers in them are intentionally hidden, so that's an easy way to have some privacy
 
 # Running
 Broadcast Box is made up of two parts. The server is written in Go and is in charge
@@ -115,7 +71,7 @@ Go uses `.env` files for configuration. For development `.env.development` is us
 and in production `.env.production` is used.
 
 Setting `APP_ENV` will cause `.env.production` to be loaded.
-Otherwise `.env.development` is used.
+Otherwise, `.env.development` is used.
 
 ### Local Development
 To run the Go server with frontend, run `go run .` in the root of this project. You will see the logs
@@ -170,7 +126,10 @@ broadcast-box:
 The command to upload the image to Dockerhub is `docker buildx build --platform=linux/amd64,linux/arm64 --push -t seaduboi/broadcast-box:latest .`
 
 # Design
-The backend exposes two endpoints.
+The backend exposes following endpoints:
 
 * `/api/whip` - Start a WHIP Session. WHIP broadcasts video via WebRTC.
 * `/api/whep` - Start a WHEP Session. WHEP is video playback via WebRTC.
+* `/api/status` - JSON array of current connections.
+* `/api/sse` - Internal API.
+* `/api/layer` - Internal API.
