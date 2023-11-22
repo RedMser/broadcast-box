@@ -12,17 +12,6 @@ With WebRTC you get access to the latest in video codecs. With AV1 you can send
 the same video quality with a [50%](https://engineering.fb.com/2018/04/10/video-engineering/av1-beats-x264-and-libvpx-vp9-in-practical-use-case/)
 reduction in bandwidth required.
 
-### Broadcast all angles
-WebRTC allows you to upload multiple video streams in the same session. Now you can
-broadcast multiple camera angles, or share interactive video experiences in real time!
-
-### Broadcasters provide transcodes
-Transcodes are necessary if you want to provide a good experience to all your users.
-Generating them is prohibitively though. WebRTC provides a solution. With WebRTC
-users can upload the same video at different quality levels. This
-keeps things cheap for the server operator, and you still can provide the same
-experience.
-
 ### Peer-to-Peer (if you need it)
 With Broadcast Box you can serve your video without a public IP or forwarding ports!
 Run Broadcast Box on the same machine that you are running OBS, and share your
