@@ -1,4 +1,4 @@
-module github.com/glimesh/broadcast-box
+module github.com/redmser/broadcast-box
 
 go 1.19
 
