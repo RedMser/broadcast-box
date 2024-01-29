@@ -35,6 +35,10 @@ func logHTTPError(w http.ResponseWriter, err string, code int) {
 }
 
 func whipHandler(res http.ResponseWriter, r *http.Request) {
+	if r.Method == "DELETE" {
+		return
+	}
+
 	streamKey := r.Header.Get("Authorization")
 	if streamKey == "" {
 		logHTTPError(res, "Authorization was not set", http.StatusBadRequest)
