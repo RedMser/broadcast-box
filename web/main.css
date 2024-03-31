@@ -35,8 +35,19 @@ nav ul {
     font-size: larger;
 }
 
+nav li p {
+    margin: 0;
+    font-size: x-small;
+    padding-left: 1em;
+    display: inline;
+}
+
 a {
     color: #3a7de8;
+}
+
+#newStream {
+    color: white;
 }
 
 nav progress {

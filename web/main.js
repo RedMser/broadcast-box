@@ -34,6 +34,34 @@ function autoHideNav() {
     });
 }
 
+function formatSeconds(seconds) {
+    const original = seconds;
+    if (seconds < 10) {
+        return `just now`;
+    }
+    if (seconds < 60) {
+        return `${Math.floor(seconds / 10) * 10} seconds`;
+    }
+    seconds /= 60;
+    if (seconds < 60) {
+        return `${Math.floor(seconds)} minutes`;
+    }
+    seconds /= 60;
+    if (seconds < 24) {
+        return `${Math.floor(seconds)} hours`;
+    }
+    seconds /= 24;
+    if (seconds < 7) {
+        return `${Math.floor(seconds)} days`;
+    }
+    seconds /= 7;
+    if (seconds < 4) {
+        return `${Math.floor(seconds)} weeks`;
+    }
+    const pastTime = new Date(new Date().getTime() - original * 1000);
+    return pastTime.toISOString();
+}
+
 async function fetchStatus() {
     let currentStream = location.pathname.split(/\//g);
     currentStream = currentStream[currentStream.length - 1];
@@ -43,11 +71,9 @@ async function fetchStatus() {
     if (currentStream && !json.some(stream => stream.streamKey === currentKey)) {
         json.push({
             streamKey: currentKey,
-            isStreaming: false,
         });
     }
     json = json
-        .filter(s => s.isStreaming)
         .sort((a, b) => a.streamKey.localeCompare(b.streamKey));
     const body = [];
     for (const stream of json) {
@@ -60,6 +86,14 @@ async function fetchStatus() {
         }
         a.href = `/${encodeURIComponent(streamName)}`;
         li.appendChild(a);
+        if (stream.firstSeenEpoch) {
+            const currentEpoch = Math.floor((new Date()).getTime() / 1000);
+            const secondsSince = currentEpoch - stream.firstSeenEpoch;
+            const timeSince = formatSeconds(secondsSince);
+            const details = document.createElement('p');
+            details.innerText = timeSince;
+            li.appendChild(details);
+        }
         body.push(li);
     }
     navUl.replaceChildren(...body);
@@ -217,6 +251,15 @@ async function pageStream(key) {
         type: 'answer'
     });
 }
+
+function newStream() {
+    const streamKey = prompt("Enter stream key. Use numbers to hide your stream from the status list.", "temp" + Math.floor(Math.random() * 10000000));
+    if (!streamKey) {
+        return;
+    }
+    location.assign(`/publish/${streamKey}`);
+}
+document.getElementById("newStream").addEventListener('click', () => newStream());
 
 function handleRoute() {
     const url = location.pathname;
