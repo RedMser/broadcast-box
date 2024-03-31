@@ -199,6 +199,7 @@ async function pageStream(key) {
     peerConnection.addTransceiver('video', { direction: 'recvonly' });
 
     const offer = await peerConnection.createOffer();
+    offer["sdp"] = offer["sdp"].replace("useinbandfec=1", "useinbandfec=1;stereo=1")
     peerConnection.setLocalDescription(offer);
 
     const response = await fetch(apiUrl(`whep`), {
