@@ -1,32 +1,63 @@
 package webrtc
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	"github.com/pion/dtls/v2/pkg/crypto/elliptic"
 	"github.com/pion/ice/v2"
 	"github.com/pion/interceptor"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 )
 
 const (
 	videoTrackLabelDefault = "default"
+
+	videoTrackCodecH264 videoTrackCodec = iota + 1
+	videoTrackCodecVP8
+	videoTrackCodecVP9
+	videoTrackCodecAV1
 )
 
 type (
 	stream struct {
-		audioTrack       *webrtc.TrackLocalStaticRTP
-		videoTrackLabels []string
-		pliChan          chan any
+		// Does this stream have a publisher?
+		// If stream was created by a WHEP request hasWHIPClient == false
+		hasWHIPClient atomic.Bool
+
+		firstSeenEpoch uint64
+
+		videoTracks []*videoTrack
+
+		audioTrack           *webrtc.TrackLocalStaticRTP
+		audioPacketsReceived atomic.Uint64
+
+		pliChan chan any
+
+		whipActiveContext       context.Context
+		whipActiveContextCancel func()
+
 		whepSessionsLock sync.RWMutex
 		whepSessions     map[string]*whepSession
 	}
+
+	videoTrack struct {
+		rid             string
+		packetsReceived atomic.Uint64
+	}
+
+	videoTrackCodec int
 )
 
 type StreamStatus struct {
@@ -38,9 +69,28 @@ var (
 	streamMap        map[string]*stream
 	streamMapLock    sync.Mutex
 	apiWhip, apiWhep *webrtc.API
+
+	// nolint
+	videoRTCPFeedback = []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}}
 )
 
-func getStream(streamKey string) (*stream, error) {
+func getVideoTrackCodec(in string) videoTrackCodec {
+	downcased := strings.ToLower(in)
+	switch {
+	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeH264)):
+		return videoTrackCodecH264
+	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeVP8)):
+		return videoTrackCodecVP8
+	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeVP9)):
+		return videoTrackCodecVP9
+	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeAV1)):
+		return videoTrackCodecAV1
+	}
+
+	return 0
+}
+
+func getStream(streamKey string, forWHIP bool) (*stream, error) {
 	foundStream, ok := streamMap[streamKey]
 	if !ok {
 		audioTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
@@ -48,36 +98,63 @@ func getStream(streamKey string) (*stream, error) {
 			return nil, err
 		}
 
+		whipActiveContext, whipActiveContextCancel := context.WithCancel(context.Background())
+
 		foundStream = &stream{
-			audioTrack:   audioTrack,
-			pliChan:      make(chan any, 50),
-			whepSessions: map[string]*whepSession{},
+			audioTrack:              audioTrack,
+			pliChan:                 make(chan any, 50),
+			whepSessions:            map[string]*whepSession{},
+			whipActiveContext:       whipActiveContext,
+			whipActiveContextCancel: whipActiveContextCancel,
+			firstSeenEpoch:          uint64(time.Now().Unix()),
 		}
 		streamMap[streamKey] = foundStream
+	}
+
+	if forWHIP {
+		foundStream.hasWHIPClient.Store(true)
 	}
 
 	return foundStream, nil
 }
 
-func deleteStream(streamKey string) {
+func peerConnectionDisconnected(streamKey string, whepSessionId string) {
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
 
-	delete(streamMap, streamKey)
-}
+	stream, ok := streamMap[streamKey]
+	if !ok {
+		return
+	}
 
-func addTrack(stream *stream, rid string) error {
-	streamMapLock.Lock()
-	defer streamMapLock.Unlock()
+	if whepSessionId != "" {
+		stream.whepSessionsLock.Lock()
+		defer stream.whepSessionsLock.Unlock()
+		delete(stream.whepSessions, whepSessionId)
 
-	for i := range stream.videoTrackLabels {
-		if rid == stream.videoTrackLabels[i] {
-			return nil
+		// Only delete stream if all WHEP Sessions are gone and have no WHIP Client
+		if len(stream.whepSessions) != 0 || stream.hasWHIPClient.Load() {
+			return
 		}
 	}
 
-	stream.videoTrackLabels = append(stream.videoTrackLabels, rid)
-	return nil
+	stream.whipActiveContextCancel()
+	delete(streamMap, streamKey)
+}
+
+func addTrack(stream *stream, rid string) (*videoTrack, error) {
+	streamMapLock.Lock()
+	defer streamMapLock.Unlock()
+
+	for i := range stream.videoTracks {
+		if rid == stream.videoTracks[i].rid {
+			return stream.videoTracks[i], nil
+		}
+	}
+
+	t := &videoTrack{rid: rid}
+	stream.videoTracks = append(stream.videoTracks, t)
+	return t, nil
 }
 
 func getPublicIP() string {
@@ -106,13 +183,14 @@ func getPublicIP() string {
 	return ip.Query
 }
 
-func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefault) (settingEngine webrtc.SettingEngine) {
+func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefault, tcpMuxCache map[string]ice.TCPMux) (settingEngine webrtc.SettingEngine) {
 	var (
 		NAT1To1IPs []string
 		udpMuxPort int
 		udpMuxOpts []ice.UDPMuxFromPortOption
 		err        error
 	)
+	networkTypes := []webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6}
 
 	if os.Getenv("INCLUDE_PUBLIC_IP_IN_NAT_1_TO_1_IP") != "" {
 		NAT1To1IPs = append(NAT1To1IPs, getPublicIP())
@@ -162,23 +240,37 @@ func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefaul
 	}
 
 	if os.Getenv("TCP_MUX_ADDRESS") != "" {
-		tcpAddr, err := net.ResolveTCPAddr("udp", os.Getenv("TCP_MUX_ADDRESS"))
-		if err != nil {
-			log.Fatal(err)
-		}
+		tcpMux, ok := tcpMuxCache[os.Getenv("TCP_MUX_ADDRESS")]
+		if !ok {
+			tcpAddr, err := net.ResolveTCPAddr("tcp", os.Getenv("TCP_MUX_ADDRESS"))
+			if err != nil {
+				log.Fatal(err)
+			}
 
-		tcpListener, err := net.ListenTCP("tcp", tcpAddr)
-		if err != nil {
-			log.Fatal(err)
-		}
+			tcpListener, err := net.ListenTCP("tcp", tcpAddr)
+			if err != nil {
+				log.Fatal(err)
+			}
 
-		settingEngine.SetICETCPMux(webrtc.NewICETCPMux(nil, tcpListener, 8))
+			tcpMux = webrtc.NewICETCPMux(nil, tcpListener, 8)
+			tcpMuxCache[os.Getenv("TCP_MUX_ADDRESS")] = tcpMux
+		}
+		settingEngine.SetICETCPMux(tcpMux)
+
+		if os.Getenv("TCP_MUX_FORCE") != "" {
+			networkTypes = []webrtc.NetworkType{webrtc.NetworkTypeTCP4, webrtc.NetworkTypeTCP6}
+		} else {
+			networkTypes = append(networkTypes, webrtc.NetworkTypeTCP4, webrtc.NetworkTypeTCP6)
+		}
 	}
+
+	settingEngine.SetDTLSEllipticCurves(elliptic.X25519, elliptic.P384, elliptic.P256)
+	settingEngine.SetNetworkTypes(networkTypes)
 
 	return
 }
 
-func populateMediaEngine(m *webrtc.MediaEngine) error {
+func PopulateMediaEngine(m *webrtc.MediaEngine) error {
 	for _, codec := range []webrtc.RTPCodecParameters{
 		{
 			// nolint
@@ -191,93 +283,44 @@ func populateMediaEngine(m *webrtc.MediaEngine) error {
 		}
 	}
 
-	// nolint
-	videoRTCPFeedback := []webrtc.RTCPFeedback{{"goog-remb", ""}, {"ccm", "fir"}, {"nack", ""}, {"nack", "pli"}}
-	for _, codec := range []webrtc.RTPCodecParameters{
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeH264, 90000, 0, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f", videoRTCPFeedback},
-			PayloadType:        102,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{"video/rtx", 90000, 0, "apt=102", nil},
-			PayloadType:        121,
-		},
-
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeH264, 90000, 0, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f", videoRTCPFeedback},
-			PayloadType:        127,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{"video/rtx", 90000, 0, "apt=127", nil},
-			PayloadType:        120,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeH264, 90000, 0, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", videoRTCPFeedback},
-			PayloadType:        125,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{"video/rtx", 90000, 0, "apt=125", nil},
-			PayloadType:        107,
-		},
-
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeH264, 90000, 0, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f", videoRTCPFeedback},
-			PayloadType:        108,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{"video/rtx", 90000, 0, "apt=108", nil},
-			PayloadType:        109,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeH264, 90000, 0, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f", videoRTCPFeedback},
-			PayloadType:        127,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{"video/rtx", 90000, 0, "apt=127", nil},
-			PayloadType:        120,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeH264, 90000, 0, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032", videoRTCPFeedback},
-			PayloadType:        123,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{"video/rtx", 90000, 0, "apt=123", nil},
-			PayloadType:        118,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{webrtc.MimeTypeAV1, 90000, 0, "", videoRTCPFeedback},
-			PayloadType:        124,
-		},
-		{
-			// nolint
-			RTPCodecCapability: webrtc.RTPCodecCapability{"video/rtx", 90000, 0, "apt=124", nil},
-			PayloadType:        125,
-		},
+	for _, codecDetails := range []struct {
+		payloadType uint8
+		mimeType    string
+		sdpFmtpLine string
+	}{
+		{102, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"},
+		{104, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f"},
+		{106, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"},
+		{108, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f"},
+		{39, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=4d001f"},
+		{45, webrtc.MimeTypeAV1, ""},
+		{98, webrtc.MimeTypeVP9, "profile-id=0"},
+		{100, webrtc.MimeTypeVP9, "profile-id=2"},
+		{112, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64001f"},
 	} {
-		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
+		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:     codecDetails.mimeType,
+				ClockRate:    90000,
+				Channels:     0,
+				SDPFmtpLine:  codecDetails.sdpFmtpLine,
+				RTCPFeedback: videoRTCPFeedback,
+			},
+			PayloadType: webrtc.PayloadType(codecDetails.payloadType),
+		}, webrtc.RTPCodecTypeVideo); err != nil {
 			return err
 		}
-	}
 
-	for _, extension := range []string{
-		"urn:ietf:params:rtp-hdrext:sdes:mid",
-		"urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id",
-		"urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id",
-	} {
-		if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: extension}, webrtc.RTPCodecTypeVideo); err != nil {
+		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType:     "video/rtx",
+				ClockRate:    90000,
+				Channels:     0,
+				SDPFmtpLine:  fmt.Sprintf("apt=%d", codecDetails.payloadType),
+				RTCPFeedback: nil,
+			},
+			PayloadType: webrtc.PayloadType(codecDetails.payloadType + 1),
+		}, webrtc.RTPCodecTypeVideo); err != nil {
 			return err
 		}
 	}
@@ -285,11 +328,25 @@ func populateMediaEngine(m *webrtc.MediaEngine) error {
 	return nil
 }
 
+func newPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
+	cfg := webrtc.Configuration{}
+
+	if stunServers := os.Getenv("STUN_SERVERS"); stunServers != "" {
+		for _, stunServer := range strings.Split(stunServers, "|") {
+			cfg.ICEServers = append(cfg.ICEServers, webrtc.ICEServer{
+				URLs: []string{"stun:" + stunServer},
+			})
+		}
+	}
+
+	return api.NewPeerConnection(cfg)
+}
+
 func Configure() {
 	streamMap = map[string]*stream{}
 
 	mediaEngine := &webrtc.MediaEngine{}
-	if err := populateMediaEngine(mediaEngine); err != nil {
+	if err := PopulateMediaEngine(mediaEngine); err != nil {
 		panic(err)
 	}
 
@@ -299,16 +356,83 @@ func Configure() {
 	}
 
 	udpMuxCache := map[int]*ice.MultiUDPMuxDefault{}
+	tcpMuxCache := map[string]ice.TCPMux{}
 
 	apiWhip = webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
-		webrtc.WithSettingEngine(createSettingEngine(true, udpMuxCache)),
+		webrtc.WithSettingEngine(createSettingEngine(true, udpMuxCache, tcpMuxCache)),
 	)
 
 	apiWhep = webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
 		webrtc.WithInterceptorRegistry(interceptorRegistry),
-		webrtc.WithSettingEngine(createSettingEngine(false, udpMuxCache)),
+		webrtc.WithSettingEngine(createSettingEngine(false, udpMuxCache, tcpMuxCache)),
 	)
+}
+
+type StreamStatusVideo struct {
+	RID             string `json:"rid"`
+	PacketsReceived uint64 `json:"packetsReceived"`
+}
+
+type StreamStatus struct {
+	StreamKey            string              `json:"streamKey"`
+	FirstSeenEpoch       uint64              `json:"firstSeenEpoch"`
+	AudioPacketsReceived uint64              `json:"audioPacketsReceived"`
+	VideoStreams         []StreamStatusVideo `json:"videoStreams"`
+	WHEPSessions         []whepSessionStatus `json:"whepSessions"`
+}
+
+type whepSessionStatus struct {
+	ID             string `json:"id"`
+	CurrentLayer   string `json:"currentLayer"`
+	SequenceNumber uint16 `json:"sequenceNumber"`
+	Timestamp      uint32 `json:"timestamp"`
+	PacketsWritten uint64 `json:"packetsWritten"`
+}
+
+func GetStreamStatuses() []StreamStatus {
+	streamMapLock.Lock()
+	defer streamMapLock.Unlock()
+
+	out := []StreamStatus{}
+
+	for streamKey, stream := range streamMap {
+		whepSessions := []whepSessionStatus{}
+		stream.whepSessionsLock.Lock()
+		for id, whepSession := range stream.whepSessions {
+			currentLayer, ok := whepSession.currentLayer.Load().(string)
+			if !ok {
+				continue
+			}
+
+			whepSessions = append(whepSessions, whepSessionStatus{
+				ID:             id,
+				CurrentLayer:   currentLayer,
+				SequenceNumber: whepSession.sequenceNumber,
+				Timestamp:      whepSession.timestamp,
+				PacketsWritten: whepSession.packetsWritten,
+			})
+		}
+		stream.whepSessionsLock.Unlock()
+
+		streamStatusVideo := []StreamStatusVideo{}
+		for _, videoTrack := range stream.videoTracks {
+			streamStatusVideo = append(streamStatusVideo, StreamStatusVideo{
+				RID:             videoTrack.rid,
+				PacketsReceived: videoTrack.packetsReceived.Load(),
+			})
+		}
+
+		out = append(out, StreamStatus{
+			StreamKey:            streamKey,
+			FirstSeenEpoch:       stream.firstSeenEpoch,
+			AudioPacketsReceived: stream.audioPacketsReceived.Load(),
+			VideoStreams:         streamStatusVideo,
+			WHEPSessions:         whepSessions,
+		})
+	}
+
+	return out
 }

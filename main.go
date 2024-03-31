@@ -8,18 +8,26 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"crypto/tls"
 	"log"
 	"net/http"
 
 	"github.com/joho/godotenv"
+	"github.com/redmser/broadcast-box/internal/networktest"
 	"github.com/redmser/broadcast-box/internal/webrtc"
 )
 
 const (
 	envFileProd = ".env.production"
 	envFileDev  = ".env.development"
+
+	networkTestIntroMessage   = "\033[0;33mNETWORK_TEST_ON_START is enabled. If the test fails Broadcast Box will exit.\nSee the README for how to debug or disable NETWORK_TEST_ON_START\033[0m"
+	networkTestSuccessMessage = "\033[0;32mNetwork Test passed.\nHave fun using Broadcast Box.\033[0m"
+	networkTestFailedMessage  = "\033[0;31mNetwork Test failed.\n%s\nPlease see the README and join Discord for help\033[0m"
+
+	noBuildDirectoryMessage = "\033[0;31mBuild directory does not exist, run `npm install` and `npm run build` in the web directory.\033[0m"
 )
 
 type (
@@ -35,6 +43,10 @@ func logHTTPError(w http.ResponseWriter, err string, code int) {
 }
 
 func whipHandler(res http.ResponseWriter, r *http.Request) {
+	if r.Method == "DELETE" {
+		return
+	}
+
 	streamKey := r.Header.Get("Authorization")
 	if streamKey == "" {
 		logHTTPError(res, "Authorization was not set", http.StatusBadRequest)
@@ -54,6 +66,7 @@ func whipHandler(res http.ResponseWriter, r *http.Request) {
 	}
 
 	res.Header().Add("Location", "/api/whip")
+	res.Header().Add("Content-Type", "application/sdp")
 	res.WriteHeader(http.StatusCreated)
 	fmt.Fprint(res, answer)
 }
@@ -81,6 +94,7 @@ func whepHandler(res http.ResponseWriter, req *http.Request) {
 	res.Header().Add("Link", `<`+apiPath+"sse/"+whepSessionId+`>; rel="urn:ietf:params:whep:ext:core:server-sent-events"; events="layers"`)
 	res.Header().Add("Link", `<`+apiPath+"layer/"+whepSessionId+`>; rel="urn:ietf:params:whep:ext:core:layer"`)
 	res.Header().Add("Location", "/api/whep")
+	res.Header().Add("Content-Type", "application/sdp")
 	res.WriteHeader(http.StatusCreated)
 	fmt.Fprint(res, answer)
 }
@@ -130,8 +144,10 @@ func containsNumber(s string) bool {
 }
 
 func statusHandler(res http.ResponseWriter, req *http.Request) {
+	res.Header().Add("Content-Type", "application/json")
+
 	statuses := []webrtc.StreamStatus{}
-	for _, s := range webrtc.GetAllStreamsStatus() {
+	for _, s := range webrtc.GetStreamStatuses() {
 		// Use some condition to allow filtering out your streams from public viewing.
 		if !containsNumber(s.StreamKey) {
 			statuses = append(statuses, s)
@@ -171,21 +187,41 @@ func corsHandler(next func(w http.ResponseWriter, r *http.Request)) http.Handler
 }
 
 func main() {
-	if os.Getenv("APP_ENV") == "production" {
-		log.Println("Loading `" + envFileProd + "`")
-
-		if err := godotenv.Load(envFileProd); err != nil {
-			log.Fatal(err)
-		}
-	} else {
+	if os.Getenv("APP_ENV") == "development" {
 		log.Println("Loading `" + envFileDev + "`")
 
 		if err := godotenv.Load(envFileDev); err != nil {
 			log.Fatal(err)
 		}
+	} else {
+		log.Println("Loading `" + envFileProd + "`")
+
+		_, err := os.Stat("./web/build")
+		if os.IsNotExist(err) {
+			log.Fatal(noBuildDirectoryMessage)
+		}
+
+		if err := godotenv.Load(envFileProd); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	webrtc.Configure()
+
+	if os.Getenv("NETWORK_TEST_ON_START") == "true" {
+		fmt.Println(networkTestIntroMessage) //nolint
+
+		go func() {
+			time.Sleep(time.Second * 5)
+
+			if networkTestErr := networktest.Run(whepHandler); networkTestErr != nil {
+				fmt.Printf(networkTestFailedMessage, networkTestErr.Error())
+				os.Exit(1)
+			} else {
+				fmt.Println(networkTestSuccessMessage) //nolint
+			}
+		}()
+	}
 
 	if os.Getenv("ENABLE_HTTP_REDIRECT") != "" {
 		go func() {
@@ -206,9 +242,12 @@ func main() {
 	mux.Handle("/", indexHTMLWhenNotFound(http.Dir("./web")))
 	mux.HandleFunc("/api/whip", corsHandler(whipHandler))
 	mux.HandleFunc("/api/whep", corsHandler(whepHandler))
-	mux.HandleFunc("/api/status", corsHandler(statusHandler))
 	mux.HandleFunc("/api/sse/", corsHandler(whepServerSentEventsHandler))
 	mux.HandleFunc("/api/layer/", corsHandler(whepLayerHandler))
+
+	if os.Getenv("DISABLE_STATUS") == "" {
+		mux.HandleFunc("/api/status", corsHandler(statusHandler))
+	}
 
 	server := &http.Server{
 		Handler: mux,

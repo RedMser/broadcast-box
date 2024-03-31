@@ -8,10 +8,10 @@ import (
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 )
 
-func audioWriter(remoteTrack *webrtc.TrackRemote, audioTrack *webrtc.TrackLocalStaticRTP) {
+func audioWriter(remoteTrack *webrtc.TrackRemote, stream *stream) {
 	rtpBuf := make([]byte, 1500)
 	for {
 		rtpRead, _, err := remoteTrack.Read(rtpBuf)
@@ -23,7 +23,8 @@ func audioWriter(remoteTrack *webrtc.TrackRemote, audioTrack *webrtc.TrackLocalS
 			return
 		}
 
-		if _, writeErr := audioTrack.Write(rtpBuf[:rtpRead]); writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
+		stream.audioPacketsReceived.Add(1)
+		if _, writeErr := stream.audioTrack.Write(rtpBuf[:rtpRead]); writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
 			log.Println(writeErr)
 			return
 		}
@@ -36,32 +37,34 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 		id = videoTrackLabelDefault
 	}
 
-	if err := addTrack(s, id); err != nil {
+	videoTrack, err := addTrack(s, id)
+	if err != nil {
 		log.Println(err)
 		return
 	}
 
 	go func() {
-		for range stream.pliChan {
-			if sendErr := peerConnection.WriteRTCP([]rtcp.Packet{
-				&rtcp.PictureLossIndication{
-					MediaSSRC: uint32(remoteTrack.SSRC()),
-				},
-			}); sendErr != nil {
+		for {
+			select {
+			case <-stream.whipActiveContext.Done():
 				return
+			case <-stream.pliChan:
+				if sendErr := peerConnection.WriteRTCP([]rtcp.Packet{
+					&rtcp.PictureLossIndication{
+						MediaSSRC: uint32(remoteTrack.SSRC()),
+					},
+				}); sendErr != nil {
+					return
+				}
 			}
 		}
 	}()
 
-	isAV1 :=
-		strings.Contains(
-			strings.ToLower(webrtc.MimeTypeAV1),
-			strings.ToLower(remoteTrack.Codec().RTPCodecCapability.MimeType),
-		)
-
 	rtpBuf := make([]byte, 1500)
 	rtpPkt := &rtp.Packet{}
 	lastTimestamp := uint32(0)
+	codec := getVideoTrackCodec(remoteTrack.Codec().RTPCodecCapability.MimeType)
+
 	for {
 		rtpRead, _, err := remoteTrack.Read(rtpBuf)
 		switch {
@@ -77,6 +80,11 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 			return
 		}
 
+		videoTrack.packetsReceived.Add(1)
+
+		rtpPkt.Extension = false
+		rtpPkt.Extensions = nil
+
 		timeDiff := rtpPkt.Timestamp - lastTimestamp
 		if lastTimestamp == 0 {
 			timeDiff = 0
@@ -85,61 +93,28 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 
 		s.whepSessionsLock.RLock()
 		for i := range s.whepSessions {
-			s.whepSessions[i].sendVideoPacket(rtpPkt, id, timeDiff, isAV1)
+			s.whepSessions[i].sendVideoPacket(rtpPkt, id, timeDiff, codec)
 		}
 		s.whepSessionsLock.RUnlock()
 	}
 }
 
 func WHIP(offer, streamKey string) (string, error) {
-	peerConnection, err := apiWhip.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			/*
-			{
-				URLs: []string{
-					"turn:freeturn.net:3478",
-				},
-				Username: "free",
-				Credential: "free",
-				CredentialType: webrtc.ICECredentialTypePassword,
-			},
-			*/
-			{
-				URLs: []string{
-					"stun:stun1.l.google.com:19302",
-				},
-			},
-			{
-				URLs: []string{
-					"stun:stun2.l.google.com:19302",
-				},
-			},
-			{
-				URLs: []string{
-					"stun:stun3.l.google.com:19302",
-				},
-			},
-			{
-				URLs: []string{
-					"stun:stun4.l.google.com:19302",
-				},
-			},
-		},
-	})
+	peerConnection, err := newPeerConnection(apiWhip)
 	if err != nil {
 		return "", err
 	}
 
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
-	stream, err := getStream(streamKey)
+	stream, err := getStream(streamKey, true)
 	if err != nil {
 		return "", err
 	}
 
 	peerConnection.OnTrack(func(remoteTrack *webrtc.TrackRemote, rtpReceiver *webrtc.RTPReceiver) {
 		if strings.HasPrefix(remoteTrack.Codec().RTPCodecCapability.MimeType, "audio") {
-			audioWriter(remoteTrack, stream.audioTrack)
+			audioWriter(remoteTrack, stream)
 		} else {
 			videoWriter(remoteTrack, stream, peerConnection, stream)
 
@@ -147,11 +122,11 @@ func WHIP(offer, streamKey string) (string, error) {
 	})
 
 	peerConnection.OnICEConnectionStateChange(func(i webrtc.ICEConnectionState) {
-		if i == webrtc.ICEConnectionStateFailed {
+		if i == webrtc.ICEConnectionStateFailed || i == webrtc.ICEConnectionStateClosed {
 			if err := peerConnection.Close(); err != nil {
 				log.Println(err)
 			}
-			deleteStream(streamKey)
+			peerConnectionDisconnected(streamKey, "")
 		}
 	})
 
@@ -184,6 +159,7 @@ func GetAllStreamsStatus() (out []StreamStatus) {
 		out = append(out, StreamStatus{
 			StreamKey: key,
 			// HACK: better than nothing, but there's likely better ways...
+			// Might not be needed anymore? See if this causes any problems down the line.
 			IsStreaming: len(stream.videoTrackLabels) > 0,
 		})
 	}

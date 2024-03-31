@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 )
 
 type (
@@ -19,6 +19,7 @@ type (
 		currentLayer   atomic.Value
 		sequenceNumber uint16
 		timestamp      uint32
+		packetsWritten uint64
 	}
 
 	simulcastLayerResponse struct {
@@ -36,8 +37,8 @@ func WHEPLayers(whepSessionId string) ([]byte, error) {
 		defer streamMap[streamKey].whepSessionsLock.Unlock()
 
 		if _, ok := streamMap[streamKey].whepSessions[whepSessionId]; ok {
-			for i := range streamMap[streamKey].videoTrackLabels {
-				layers = append(layers, simulcastLayerResponse{EncodingId: streamMap[streamKey].videoTrackLabels[i]})
+			for i := range streamMap[streamKey].videoTracks {
+				layers = append(layers, simulcastLayerResponse{EncodingId: streamMap[streamKey].videoTracks[i].rid})
 			}
 
 			break
@@ -73,7 +74,7 @@ func WHEPChangeLayer(whepSessionId, layer string) error {
 func WHEP(offer, streamKey string) (string, string, error) {
 	streamMapLock.Lock()
 	defer streamMapLock.Unlock()
-	stream, err := getStream(streamKey)
+	stream, err := getStream(streamKey, false)
 	if err != nil {
 		return "", "", err
 	}
@@ -82,53 +83,18 @@ func WHEP(offer, streamKey string) (string, string, error) {
 
 	videoTrack := &trackMultiCodec{id: "video", streamID: "pion"}
 
-	peerConnection, err := apiWhep.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			/*
-			{
-				URLs: []string{
-					"turn:freeturn.net:3478",
-				},
-				Username: "free",
-				Credential: "free",
-				CredentialType: webrtc.ICECredentialTypePassword,
-			},
-			*/
-			{
-				URLs: []string{
-					"stun:stun1.l.google.com:19302",
-				},
-			},
-			{
-				URLs: []string{
-					"stun:stun2.l.google.com:19302",
-				},
-			},
-			{
-				URLs: []string{
-					"stun:stun3.l.google.com:19302",
-				},
-			},
-			{
-				URLs: []string{
-					"stun:stun4.l.google.com:19302",
-				},
-			},
-		},
-	})
+	peerConnection, err := newPeerConnection(apiWhep)
 	if err != nil {
 		return "", "", err
 	}
 
 	peerConnection.OnICEConnectionStateChange(func(i webrtc.ICEConnectionState) {
-		if i == webrtc.ICEConnectionStateFailed {
+		if i == webrtc.ICEConnectionStateFailed || i == webrtc.ICEConnectionStateClosed {
 			if err := peerConnection.Close(); err != nil {
 				log.Println(err)
 			}
 
-			stream.whepSessionsLock.Lock()
-			defer stream.whepSessionsLock.Unlock()
-			delete(stream.whepSessions, whepSessionId)
+			peerConnectionDisconnected(streamKey, whepSessionId)
 		}
 	})
 
@@ -188,20 +154,21 @@ func WHEP(offer, streamKey string) (string, string, error) {
 	return peerConnection.LocalDescription().SDP, whepSessionId, nil
 }
 
-func (w *whepSession) sendVideoPacket(rtpPkt *rtp.Packet, layer string, timeDiff uint32, isAV1 bool) {
+func (w *whepSession) sendVideoPacket(rtpPkt *rtp.Packet, layer string, timeDiff uint32, codec videoTrackCodec) {
 	if w.currentLayer.Load() == "" {
 		w.currentLayer.Store(layer)
 	} else if layer != w.currentLayer.Load() {
 		return
 	}
 
+	w.packetsWritten += 1
 	w.sequenceNumber += 1
 	w.timestamp += timeDiff
 
 	// rtpPkt.SequenceNumber = w.sequenceNumber
 	rtpPkt.Timestamp = w.timestamp
 
-	if err := w.videoTrack.WriteRTP(rtpPkt, isAV1); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+	if err := w.videoTrack.WriteRTP(rtpPkt, codec); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 		log.Println(err)
 	}
 }
