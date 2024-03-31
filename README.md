@@ -25,6 +25,11 @@ Broadcast Box lets you broadcast to others in sub-second time. It was designed
 to be simple to use and easily modifiable. We wrote Broadcast Box to show off some
 of the cutting edge tech that is coming to the broadcast space.
 
+This is a **custom fork** of the [original repository](https://github.com/Glimesh/broadcast-box)
+which makes the project easier to deploy for quick and hacky development among friends.
+It might be missing some features, or an overall polish on its frontend.
+I recommend the original project for a more professionally designed solution.
+
 Want to contribute to the development of Broadcast Box? See [Contributing](./CONTRIBUTING.md).
 
 ### Sub-second Latency
