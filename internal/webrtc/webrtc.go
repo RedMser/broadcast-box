@@ -60,11 +60,6 @@ type (
 	videoTrackCodec int
 )
 
-type StreamStatus struct {
-	StreamKey string `json:"streamKey"`
-	IsStreaming bool `json:"isStreaming"`
-}
-
 var (
 	streamMap        map[string]*stream
 	streamMapLock    sync.Mutex

@@ -15,7 +15,7 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 
-	internalwebrtc "github.com/glimesh/broadcast-box/internal/webrtc"
+	internalwebrtc "github.com/redmser/broadcast-box/internal/webrtc"
 )
 
 func Run(whepHandler func(res http.ResponseWriter, req *http.Request)) error {
