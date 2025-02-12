@@ -142,6 +142,11 @@ async function pagePublish(key) {
         return;
     }
 
+    if (!navigator.mediaDevices) {
+        pageError("MediaDevices API was not found. Publishing in Broadcast Box requires HTTPS.");
+        return;
+    }
+
     const dialog = document.querySelector('dialog.publish');
     dialog.showModal();
     await new Promise(res => {
@@ -196,6 +201,14 @@ async function pagePublish(key) {
         }
     });
 
+    peerConnection.oniceconnectionstatechange = () => {
+        if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
+            // TODO: setPeerConnectionDisconnected(false)
+        } else if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
+            // TODO: setPeerConnectionDisconnected(true)
+        }
+    }
+
     const offer = await peerConnection.createOffer();
     peerConnection.setLocalDescription(offer);
 
@@ -228,6 +241,14 @@ async function pageStream(key) {
     peerConnection.addEventListener('track', event => {
         video.srcObject = event.streams[0];
     });
+
+    peerConnection.oniceconnectionstatechange = () => {
+        if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
+            // TODO: setPeerConnectionDisconnected(false)
+        } else if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
+            // TODO: setPeerConnectionDisconnected(true)
+        }
+    }
 
     peerConnection.addTransceiver('audio', { direction: 'recvonly' });
     peerConnection.addTransceiver('video', { direction: 'recvonly' });

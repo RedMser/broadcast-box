@@ -57,6 +57,13 @@ users can upload the same video at different quality levels. This
 keeps things cheap for the server operator and you still can provide the same
 experience.
 
+### Broadcasting for all
+
+WebRTC means anyone can be a broadcaster. With Broadcast Box you could use broadcast software like OBS.
+However, another option is publishing directly from your browser! Users just getting started with streaming
+don't need to worry about bitrates, codecs anymore. With one press of a button you can go live right from
+your browser with Broadcast Box. This makes live-streaming accessible to an entirely new audience.
+
 ### Peer-to-Peer (if you need it)
 
 With Broadcast Box you can serve your video without a public IP or forwarding ports!
@@ -164,22 +171,32 @@ will be automatically updated every night. If you are running on a VPS/Cloud ser
 export URL=my-server.com
 docker-compose up -d
 ```
+## URL Parameters
+
+The frontend can be configured by passing these URL Parameters.
+
+- `cinemaMode=true` - Forces the player into cinema mode by adding to end of URL like https://b.siobud.com/myStream?cinemaMode=true
 
 ## Environment Variables
 
 The backend can be configured with the following environment variables.
 
 - `DISABLE_STATUS` - Disable the status API
-- `ENABLE_HTTP_REDIRECT` - HTTP traffic will be redirect to HTTPS
+- `DISABLE_FRONTEND` - Disable the serving of frontend. Only REST APIs + WebRTC is enabled.
 - `HTTP_ADDRESS` - HTTP Server Address
-- `INCLUDE_PUBLIC_IP_IN_NAT_1_TO_1_IP` - Like `NAT_1_TO_1_IP` but autoconfigured
-- `INTERFACE_FILTER` - Only use a certain interface for UDP traffic
-- `NAT_1_TO_1_IP` - If behind a NAT use this to auto insert your public IP
 - `NETWORK_TEST_ON_START` - When "true" on startup Broadcast Box will check network connectivity
+
+- `ENABLE_HTTP_REDIRECT` - HTTP traffic will be redirect to HTTPS
 - `SSL_CERT` - Path to SSL certificate if using Broadcast Box's HTTP Server
 - `SSL_KEY` - Path to SSL key if using Broadcast Box's HTTP Server
 
+- `NAT_1_TO_1_IP` - Announce IPs that don't belong to local machine (like Public IP). delineated by '|'
+- `INCLUDE_PUBLIC_IP_IN_NAT_1_TO_1_IP` - Like `NAT_1_TO_1_IP` but autoconfigured
+- `INTERFACE_FILTER` - Only use a certain interface for UDP traffic
+- `NAT_ICE_CANDIDATE_TYPE` - By default setting a NAT_1_TO_1_IP overrides. Set this to `srflx` to instead append IPs
 - `STUN_SERVERS` - List of STUN servers delineated by '|'. Useful if Broadcast Box is running behind a NAT
+- `NETWORK_TYPES` - List of network types to use, delineated by '|'. Default is `udp4|udp6`.
+- `INCLUDE_LOOPBACK_CANDIDATE` - Also listen for WebRTC traffic on loopback, disabled by default
 
 - `UDP_MUX_PORT_WHEP` - Like `UDP_MUX_PORT` but only for WHEP traffic
 - `UDP_MUX_PORT_WHIP` - Like `UDP_MUX_PORT` but only for WHIP traffic
@@ -187,6 +204,11 @@ The backend can be configured with the following environment variables.
 
 - `TCP_MUX_ADDRESS` - If you wish to make WebRTC traffic available via TCP.
 - `TCP_MUX_FORCE` - If you wish to make WebRTC traffic only available via TCP.
+
+- `APPEND_CANDIDATE` - Append candidates to Offer that ICE Agent did not generate. Worse version of `NAT_1_TO_1_IP`
+
+- `DEBUG_PRINT_OFFER` - Print WebRTC Offers from client to Broadcast Box. Debug things like accepted codecs.
+- `DEBUG_PRINT_ANSWER` - Print WebRTC Answers from Broadcast Box to Browser. Debug things like IP/Ports returned to client.
 
 ## Network Test on Start
 

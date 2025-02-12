@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/dtls/v2/pkg/crypto/elliptic"
-	"github.com/pion/ice/v2"
+	"github.com/pion/dtls/v3/pkg/crypto/elliptic"
+	"github.com/pion/ice/v3"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 )
@@ -28,6 +28,7 @@ const (
 	videoTrackCodecVP8
 	videoTrackCodecVP9
 	videoTrackCodecAV1
+	videoTrackCodecH265
 )
 
 type (
@@ -53,8 +54,9 @@ type (
 	}
 
 	videoTrack struct {
-		rid             string
-		packetsReceived atomic.Uint64
+		rid              string
+		packetsReceived  atomic.Uint64
+		lastKeyFrameSeen atomic.Value
 	}
 
 	videoTrackCodec int
@@ -80,6 +82,8 @@ func getVideoTrackCodec(in string) videoTrackCodec {
 		return videoTrackCodecVP9
 	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeAV1)):
 		return videoTrackCodecAV1
+	case strings.Contains(downcased, strings.ToLower(webrtc.MimeTypeH265)):
+		return videoTrackCodecH265
 	}
 
 	return 0
@@ -122,15 +126,19 @@ func peerConnectionDisconnected(streamKey string, whepSessionId string) {
 		return
 	}
 
-	if whepSessionId != "" {
-		stream.whepSessionsLock.Lock()
-		defer stream.whepSessionsLock.Unlock()
-		delete(stream.whepSessions, whepSessionId)
+	stream.whepSessionsLock.Lock()
+	defer stream.whepSessionsLock.Unlock()
 
-		// Only delete stream if all WHEP Sessions are gone and have no WHIP Client
-		if len(stream.whepSessions) != 0 || stream.hasWHIPClient.Load() {
-			return
-		}
+	if whepSessionId != "" {
+		delete(stream.whepSessions, whepSessionId)
+	} else {
+		stream.hasWHIPClient.Store(false)
+		stream.videoTracks = nil
+	}
+
+	// Only delete stream if all WHEP Sessions are gone and have no WHIP Client
+	if len(stream.whepSessions) != 0 || stream.hasWHIPClient.Load() {
+		return
 	}
 
 	stream.whipActiveContextCancel()
@@ -148,6 +156,7 @@ func addTrack(stream *stream, rid string) (*videoTrack, error) {
 	}
 
 	t := &videoTrack{rid: rid}
+	t.lastKeyFrameSeen.Store(time.Time{})
 	stream.videoTracks = append(stream.videoTracks, t)
 	return t, nil
 }
@@ -180,23 +189,40 @@ func getPublicIP() string {
 
 func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefault, tcpMuxCache map[string]ice.TCPMux) (settingEngine webrtc.SettingEngine) {
 	var (
-		NAT1To1IPs []string
-		udpMuxPort int
-		udpMuxOpts []ice.UDPMuxFromPortOption
-		err        error
+		NAT1To1IPs   []string
+		networkTypes []webrtc.NetworkType
+		udpMuxPort   int
+		udpMuxOpts   []ice.UDPMuxFromPortOption
+		err          error
 	)
-	networkTypes := []webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6}
+
+	if os.Getenv("NETWORK_TYPES") != "" {
+		for _, networkTypeStr := range strings.Split(os.Getenv("NETWORK_TYPES"), "|") {
+			networkType, err := webrtc.NewNetworkType(networkTypeStr)
+			if err != nil {
+				log.Fatal(err)
+			}
+			networkTypes = append(networkTypes, networkType)
+		}
+	} else {
+		networkTypes = append(networkTypes, webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6)
+	}
 
 	if os.Getenv("INCLUDE_PUBLIC_IP_IN_NAT_1_TO_1_IP") != "" {
 		NAT1To1IPs = append(NAT1To1IPs, getPublicIP())
 	}
 
 	if os.Getenv("NAT_1_TO_1_IP") != "" {
-		NAT1To1IPs = append(NAT1To1IPs, os.Getenv("NAT_1_TO_1_IP"))
+		NAT1To1IPs = append(NAT1To1IPs, strings.Split(os.Getenv("NAT_1_TO_1_IP"), "|")...)
+	}
+
+	natICECandidateType := webrtc.ICECandidateTypeHost
+	if os.Getenv("NAT_ICE_CANDIDATE_TYPE") == "srflx" {
+		natICECandidateType = webrtc.ICECandidateTypeSrflx
 	}
 
 	if len(NAT1To1IPs) != 0 {
-		settingEngine.SetNAT1To1IPs(NAT1To1IPs, webrtc.ICECandidateTypeHost)
+		settingEngine.SetNAT1To1IPs(NAT1To1IPs, natICECandidateType)
 	}
 
 	if os.Getenv("INTERFACE_FILTER") != "" {
@@ -261,6 +287,9 @@ func createSettingEngine(isWHIP bool, udpMuxCache map[int]*ice.MultiUDPMuxDefaul
 
 	settingEngine.SetDTLSEllipticCurves(elliptic.X25519, elliptic.P384, elliptic.P256)
 	settingEngine.SetNetworkTypes(networkTypes)
+	settingEngine.DisableSRTCPReplayProtection(true)
+	settingEngine.DisableSRTPReplayProtection(true)
+	settingEngine.SetIncludeLoopbackCandidate(os.Getenv("INCLUDE_LOOPBACK_CANDIDATE") != "")
 
 	return
 }
@@ -291,7 +320,7 @@ func PopulateMediaEngine(m *webrtc.MediaEngine) error {
 		{45, webrtc.MimeTypeAV1, ""},
 		{98, webrtc.MimeTypeVP9, "profile-id=0"},
 		{100, webrtc.MimeTypeVP9, "profile-id=2"},
-		{112, webrtc.MimeTypeH264, "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64001f"},
+		{113, webrtc.MimeTypeH265, "level-id=93;profile-id=1;tier-flag=0;tx-mode=SRST"},
 	} {
 		if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
@@ -337,6 +366,27 @@ func newPeerConnection(api *webrtc.API) (*webrtc.PeerConnection, error) {
 	return api.NewPeerConnection(cfg)
 }
 
+func appendAnswer(in string) string {
+	if extraCandidate := os.Getenv("APPEND_CANDIDATE"); extraCandidate != "" {
+		index := strings.Index(in, "a=end-of-candidates")
+		in = in[:index] + extraCandidate + in[index:]
+	}
+
+	return in
+}
+
+func maybePrintOfferAnswer(sdp string, isOffer bool) string {
+	if os.Getenv("DEBUG_PRINT_OFFER") != "" && isOffer {
+		fmt.Println(sdp)
+	}
+
+	if os.Getenv("DEBUG_PRINT_ANSWER") != "" && !isOffer {
+		fmt.Println(sdp)
+	}
+
+	return sdp
+}
+
 func Configure() {
 	streamMap = map[string]*stream{}
 
@@ -367,8 +417,9 @@ func Configure() {
 }
 
 type StreamStatusVideo struct {
-	RID             string `json:"rid"`
-	PacketsReceived uint64 `json:"packetsReceived"`
+	RID              string    `json:"rid"`
+	PacketsReceived  uint64    `json:"packetsReceived"`
+	LastKeyFrameSeen time.Time `json:"lastKeyFrameSeen"`
 }
 
 type StreamStatus struct {
@@ -414,9 +465,15 @@ func GetStreamStatuses() []StreamStatus {
 
 		streamStatusVideo := []StreamStatusVideo{}
 		for _, videoTrack := range stream.videoTracks {
+			var lastKeyFrameSeen time.Time
+			if v, ok := videoTrack.lastKeyFrameSeen.Load().(time.Time); ok {
+				lastKeyFrameSeen = v
+			}
+
 			streamStatusVideo = append(streamStatusVideo, StreamStatusVideo{
-				RID:             videoTrack.rid,
-				PacketsReceived: videoTrack.packetsReceived.Load(),
+				RID:              videoTrack.rid,
+				PacketsReceived:  videoTrack.packetsReceived.Load(),
+				LastKeyFrameSeen: lastKeyFrameSeen,
 			})
 		}
 

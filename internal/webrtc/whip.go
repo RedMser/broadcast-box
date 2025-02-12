@@ -6,9 +6,11 @@ import (
 	"log"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -65,6 +67,16 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 	rtpPkt := &rtp.Packet{}
 	codec := getVideoTrackCodec(remoteTrack.Codec().RTPCodecCapability.MimeType)
 
+	var depacketizer rtp.Depacketizer
+	switch codec {
+	case videoTrackCodecH264:
+		depacketizer = &codecs.H264Packet{}
+	case videoTrackCodecVP8:
+		depacketizer = &codecs.VP8Packet{}
+	case videoTrackCodecVP9:
+		depacketizer = &codecs.VP9Packet{}
+	}
+
 	lastTimestamp := uint32(0)
 	lastTimestampSet := false
 
@@ -87,6 +99,12 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 		}
 
 		videoTrack.packetsReceived.Add(1)
+
+		// Keyframe detection has only been implemented for H264
+		isKeyframe := isKeyframe(rtpPkt, codec, depacketizer)
+		if isKeyframe && codec == videoTrackCodecH264 {
+			videoTrack.lastKeyFrameSeen.Store(time.Now())
+		}
 
 		rtpPkt.Extension = false
 		rtpPkt.Extensions = nil
@@ -114,7 +132,7 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 
 		s.whepSessionsLock.RLock()
 		for i := range s.whepSessions {
-			s.whepSessions[i].sendVideoPacket(rtpPkt, id, timeDiff, sequenceDiff, codec)
+			s.whepSessions[i].sendVideoPacket(rtpPkt, id, timeDiff, sequenceDiff, codec, isKeyframe)
 		}
 		s.whepSessionsLock.RUnlock()
 
@@ -122,6 +140,8 @@ func videoWriter(remoteTrack *webrtc.TrackRemote, stream *stream, peerConnection
 }
 
 func WHIP(offer, streamKey string) (string, error) {
+	maybePrintOfferAnswer(offer, true)
+
 	peerConnection, err := newPeerConnection(apiWhip)
 	if err != nil {
 		return "", err
@@ -169,5 +189,5 @@ func WHIP(offer, streamKey string) (string, error) {
 	}
 
 	<-gatherComplete
-	return peerConnection.LocalDescription().SDP, nil
+	return maybePrintOfferAnswer(appendAnswer(peerConnection.LocalDescription().SDP), false), nil
 }
