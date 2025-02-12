@@ -280,7 +280,7 @@ function newStream() {
     }
     location.assign(`/publish/${streamKey}`);
 }
-document.getElementById("newStream").addEventListener('click', () => newStream());
+document.getElementById("newStream")?.addEventListener('click', () => newStream());
 
 function handleRoute() {
     const url = location.pathname;

@@ -12,10 +12,7 @@ import (
 	"path"
 	"strings"
 	"time"
-
-	"crypto/tls"
-	"log"
-	"net/http"
+	"regexp"
 
 	"github.com/joho/godotenv"
 	"github.com/redmser/broadcast-box/internal/networktest"
