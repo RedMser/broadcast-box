@@ -65,19 +65,18 @@ function formatSeconds(seconds) {
 async function fetchStatus() {
     let currentStream = location.pathname.split(/\//g);
     currentStream = currentStream[currentStream.length - 1];
-    const currentKey = `Bearer ${currentStream}`;
     const response = await fetch(apiUrl('status'));
     let json = await response.json();
-    if (currentStream && !json.some(stream => stream.streamKey === currentKey)) {
+    if (currentStream && !json.some(stream => stream.streamKey === currentStream)) {
         json.push({
-            streamKey: currentKey,
+            streamKey: currentStream,
         });
     }
     json = json
         .sort((a, b) => a.streamKey.localeCompare(b.streamKey));
     const body = [];
     for (const stream of json) {
-        const streamName = stream.streamKey.substring("Bearer ".length);
+        const streamName = stream.streamKey;
         const li = document.createElement('li');
         const a = document.createElement('a');
         a.innerText = streamName;
